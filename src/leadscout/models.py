@@ -19,6 +19,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     Uuid,
+    false,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
@@ -36,6 +37,7 @@ from leadscout.enums import (
     McpCallStatus,
     OutreachChannel,
     PhoneStatus,
+    ScoreStage,
 )
 
 NAMING_CONVENTION = {
@@ -110,12 +112,17 @@ class Business(Base):
     phone: Mapped[str | None] = mapped_column(String(32))
     domain_age_years: Mapped[float | None] = mapped_column(Float)
     company_number: Mapped[str | None] = mapped_column(String(32))
+    company_status: Mapped[str | None] = mapped_column(String(32))
+    incorporated_on: Mapped[date | None] = mapped_column(Date)
     entity_type: Mapped[EntityType] = mapped_column(
         str_enum(EntityType, "entity_type"), default=EntityType.UNKNOWN
     )
     categories: Mapped[list[str]] = mapped_column(JsonType, default=list)
     review_count: Mapped[int | None] = mapped_column(Integer)
     has_physical_location: Mapped[bool | None] = mapped_column(Boolean)
+    website_live: Mapped[bool | None] = mapped_column(Boolean)
+    is_chain: Mapped[bool | None] = mapped_column(Boolean)
+    contact_search_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     social_links: Mapped[dict[str, str]] = mapped_column(JsonType, default=dict)
     sources: Mapped[list[str]] = mapped_column(JsonType, default=list)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
@@ -190,6 +197,13 @@ class LeadScore(Base):
     score: Mapped[int] = mapped_column(Integer)
     status: Mapped[LeadStatus] = mapped_column(str_enum(LeadStatus, "lead_status"))
     reasons: Mapped[list[str]] = mapped_column(JsonType, default=list)
+    stage: Mapped[ScoreStage] = mapped_column(
+        str_enum(ScoreStage, "score_stage"), default=ScoreStage.FINAL, server_default="final"
+    )
+    lookup_eligible: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    rule_results: Mapped[list[dict[str, Any]]] = mapped_column(
+        JsonType, default=list, server_default="[]"
+    )
     scored_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     business: Mapped[Business] = relationship(back_populates="lead_score")

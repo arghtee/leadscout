@@ -8,7 +8,8 @@ Decisions on ambiguous requirements are recorded in [`ASSUMPTIONS.md`](ASSUMPTIO
 |---|---|
 | M0 Project scaffold | done |
 | M1 Data model + CSV export (AC-12) | done |
-| M2–M10 | not started |
+| M2 Qualification engine (AC-1, AC-2, AC-4) | done |
+| M3–M10 | not started |
 
 ## Stack
 
@@ -56,13 +57,33 @@ Rules: one row per contact; RFC 4180 quoting with CRLF; ISO 8601 dates; suppress
 contacts are excluded; emails exported only when `valid`/`risky`, phones only when `valid`;
 cells starting with `= + - @ TAB CR` are prefixed with `'` to block CSV/formula injection (AC-12).
 
+## Qualification (M2)
+
+Rules and scoring are pure functions in `qualification/engine.py`, configured per campaign
+(`Campaign.rules_json`, validated by `QualificationRules`).
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /campaigns/{id}/rules` | Current rules, with defaults filled in |
+| `PUT /campaigns/{id}/rules` | Replace rules (N posts, channel mode, min age/reviews, weights, thresholds, exclusions) |
+| `POST /campaigns/{id}/qualify` | Re-score every business; returns counts by status |
+
+Scoring runs in two stages (ASSUMPTIONS R1/R2):
+- **pre_lookup** (free signals only): sets `lookup_eligible`, which gates paid contact lookups. Leads at this stage are never "qualified".
+- **final** (after contact search): decision maker and contactability are added to the score.
+
+Dissolved companies, suppressed domains, existing customers and (by default) chains are rejected.
+Unknown activity always goes to review. Each `LeadScore` stores `reasons` plus per-rule
+`rule_results` with points and evidence.
+
 ## Layout
 
 ```
 src/leadscout/
-  api/main.py           FastAPI app: /health, /campaigns, CSV export
+  api/main.py           FastAPI app: /health, /campaigns, rules, qualify, CSV export
   models.py, enums.py   Section 6.1 entities
   export/csv_export.py  Section 6.2 export
+  qualification/        Section 4 rules config, role matching, engine, DB service
   seed.py               Fake data generator
   worker.py             RQ worker entry point
 migrations/             Alembic migrations
