@@ -11,6 +11,8 @@ from leadscout.db import get_session
 from leadscout.enums import CampaignOutcome, CampaignStatus, Jurisdiction, LeadStatus
 from leadscout.export.csv_export import ExportMode, ExportOptions, export_campaign_csv
 from leadscout.models import Campaign
+from leadscout.qualification.rules import QualificationRules, load_rules
+from leadscout.qualification.service import qualify_campaign
 
 app = FastAPI(title="LeadScout", version=__version__)
 
@@ -55,6 +57,42 @@ def list_campaigns(session: SessionDep) -> list[Campaign]:
     return list(session.scalars(select(Campaign).order_by(Campaign.created_at.desc())))
 
 
+class QualifyOut(BaseModel):
+    scored: int
+    qualified: int
+    review: int
+    rejected: int
+    lookup_eligible: int
+
+
+def _campaign_or_404(session: Session, campaign_id: uuid.UUID) -> Campaign:
+    campaign = session.get(Campaign, campaign_id)
+    if campaign is None:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    return campaign
+
+
+@app.get("/campaigns/{campaign_id}/rules", response_model=QualificationRules)
+def get_rules(campaign_id: uuid.UUID, session: SessionDep) -> QualificationRules:
+    return load_rules(_campaign_or_404(session, campaign_id).rules_json)
+
+
+@app.put("/campaigns/{campaign_id}/rules", response_model=QualificationRules)
+def put_rules(
+    campaign_id: uuid.UUID, rules: QualificationRules, session: SessionDep
+) -> QualificationRules:
+    campaign = _campaign_or_404(session, campaign_id)
+    campaign.rules_json = rules.model_dump(mode="json")
+    session.commit()
+    return rules
+
+
+@app.post("/campaigns/{campaign_id}/qualify", response_model=QualifyOut)
+def qualify(campaign_id: uuid.UUID, session: SessionDep) -> QualifyOut:
+    summary = qualify_campaign(session, _campaign_or_404(session, campaign_id))
+    return QualifyOut(**vars(summary))
+
+
 @app.get(
     "/campaigns/{campaign_id}/export.csv",
     response_class=Response,
@@ -70,9 +108,7 @@ def export_csv(
     max_score: Annotated[int | None, Query(ge=0, le=100)] = None,
     include_inferred: bool = False,
 ) -> Response:
-    campaign = session.get(Campaign, campaign_id)
-    if campaign is None:
-        raise HTTPException(status_code=404, detail="Campaign not found")
+    campaign = _campaign_or_404(session, campaign_id)
     options = ExportOptions(
         mode=mode,
         include_bom=bom,

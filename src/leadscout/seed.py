@@ -20,10 +20,11 @@ from leadscout.enums import (
     EmailStatus,
     EntityType,
     Jurisdiction,
-    LeadStatus,
     PhoneStatus,
 )
-from leadscout.models import ActivitySignal, Business, Campaign, Contact, LeadScore, Suppression
+from leadscout.models import ActivitySignal, Business, Campaign, Contact, Suppression
+from leadscout.qualification.rules import load_rules
+from leadscout.qualification.service import evaluate_business, qualify_business
 
 ROLES = ["Owner", "Founder", "Managing Director", "Director", "Marketing Manager", "Proprietor"]
 INDUSTRY = "Independent cafes"
@@ -38,19 +39,12 @@ def _uk_e164(fake: Faker) -> str:
     return "+447" + "".join(str(fake.random_digit()) for _ in range(9))
 
 
-def _status_for(score: int) -> LeadStatus:
-    if score >= 60:
-        return LeadStatus.QUALIFIED
-    if score >= 40:
-        return LeadStatus.REVIEW
-    return LeadStatus.REJECTED
-
-
 def seed(session: Session, n_businesses: int = 200, rng_seed: int = 42) -> Campaign:
     fake = Faker("en_GB")
     Faker.seed(rng_seed)
     rnd = random.Random(rng_seed)
-    year_start = date(date.today().year, 1, 1)
+    today = date.today()
+    year_start = date(today.year, 1, 1)
 
     campaign = Campaign(
         id=uuid.UUID(int=rnd.getrandbits(128)),
@@ -64,13 +58,16 @@ def seed(session: Session, n_businesses: int = 200, rng_seed: int = 42) -> Campa
             "low_activity_max_posts": 12,
             "qualified_threshold": 60,
             "review_threshold": 40,
+            "industry_keywords": CATEGORIES,
         },
         jurisdiction=Jurisdiction.UK_EU,
         status=CampaignStatus.COMPLETED,
     )
     session.add(campaign)
+    rules = load_rules(campaign.rules_json)
 
     suppressed_emails: list[str] = []
+    contacts_made = 0
     for i in range(n_businesses):
         name = f"{fake.last_name()}'s {rnd.choice(['Cafe', 'Coffee House', 'Bakery', 'Kitchen'])}"
         domain = f"{fake.unique.domain_word()}-{i}.co.uk"
@@ -87,6 +84,10 @@ def seed(session: Session, n_businesses: int = 200, rng_seed: int = 42) -> Campa
             phone=_uk_e164(fake),
             domain_age_years=round(rnd.uniform(0.5, 15), 1) if has_site else None,
             company_number=f"{rnd.randint(1, 99999999):08d}" if rnd.random() < 0.7 else None,
+            company_status=rnd.choices(["active", "dissolved", None], weights=[80, 3, 17])[0],
+            incorporated_on=today - timedelta(days=rnd.randint(150, 7000)),
+            website_live=has_site and rnd.random() < 0.9,
+            is_chain=rnd.random() < 0.05,
             entity_type=rnd.choice(list(EntityType)),
             categories=rnd.sample(CATEGORIES, k=2),
             review_count=rnd.randint(0, 400),
@@ -102,24 +103,20 @@ def seed(session: Session, n_businesses: int = 200, rng_seed: int = 42) -> Campa
                     ActivitySignal(
                         business=business,
                         channel=channel,
-                        posts_ytd=rnd.randint(0, 40),
+                        posts_ytd=int(rnd.expovariate(1 / 10)),
                         as_of=year_start + timedelta(days=rnd.randint(0, 200)),
                         source="seed",
                         confidence=rnd.choice(list(Confidence)),
                     )
                 )
 
-        score = rnd.randint(10, 100)
-        reasons = [
-            "Established: incorporated 2+ years" if score > 30 else "Established: unverified",
-            "Has live website" if has_site else "No website; physical location verified",
-            f"Score {score} against threshold 60",
-        ]
-        session.add(
-            LeadScore(business=business, score=score, status=_status_for(score), reasons=reasons)
-        )
+        # Mirror the pipeline: contacts are only searched for lookup-eligible businesses.
+        n_contacts = 0
+        if evaluate_business(business, campaign, rules, today=today).lookup_eligible:
+            business.contact_search_at = datetime.now(UTC)
+            n_contacts = rnd.choices([0, 1, 2], weights=[2, 5, 3])[0]
 
-        for _ in range(rnd.randint(0, 2)):
+        for _ in range(n_contacts):
             first, last = fake.first_name(), fake.last_name()
             email = f"{first}.{last}@{domain}".lower() if has_site else None
             contact = Contact(
@@ -138,11 +135,14 @@ def seed(session: Session, n_businesses: int = 200, rng_seed: int = 42) -> Campa
                 retrieved_at=datetime.now(UTC) - timedelta(days=rnd.randint(0, 30)),
                 status=rnd.choices(list(ContactStatus), weights=[20, 3, 3, 1, 1, 1], k=1)[0],
             )
-            if i < len(HOSTILE_NAMES):
-                contact.full_name = HOSTILE_NAMES[i]
+            if contacts_made < len(HOSTILE_NAMES):
+                contact.full_name = HOSTILE_NAMES[contacts_made]
+            contacts_made += 1
             session.add(contact)
             if email and rnd.random() < 0.03:
                 suppressed_emails.append(email)
+
+        qualify_business(session, business, campaign, rules, today=today)
 
     for email in suppressed_emails:
         session.add(Suppression(email_or_domain=email, reason="seed: opted out"))

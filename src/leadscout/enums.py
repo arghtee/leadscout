@@ -58,6 +58,19 @@ class LeadStatus(StrEnum):
     REJECTED = "rejected"
 
 
+class ScoreStage(StrEnum):
+    """`pre_lookup`: free signals only (decides lookup eligibility). `final`: after search."""
+
+    PRE_LOOKUP = "pre_lookup"
+    FINAL = "final"
+
+
+class RuleOutcome(StrEnum):
+    PASS = "pass"  # noqa: S105
+    FAIL = "fail"
+    UNKNOWN = "unknown"
+
+
 class ContactStatus(StrEnum):
     """Outreach lifecycle of a contact; matches the export `status` column (spec 6.2)."""
 
